@@ -29,30 +29,38 @@ class SimpleConvClassifier(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.conv = torch.nn.Sequential(
-            torch.nn.Conv2d(1, 16, kernel_size=3, padding=1),
+            torch.nn.Conv2d(3, 16, kernel_size=3, padding=1),
             torch.nn.ReLU(),
             torch.nn.Conv2d(16, 16, kernel_size=3, padding=1),
             torch.nn.ReLU(),
         )
-        self.head = torch.nn.Linear(16 * 28 * 28, 3)
+        self.head = torch.nn.Linear(16 * 32 * 32, 10)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.ndim == 2:
-            x = x.view(x.shape[0], 1, 28, 28)
+            x = x.view(x.shape[0], 3, 32, 32)
         feats = self.conv(x)
         flat = feats.view(feats.shape[0], -1)
         return self.head(flat)
 
 
 def main() -> None:
-    torch.manual_seed(15)
-    base_image = torch.rand(1, 1, 28, 28)
-    eps = 0.02
+    torch.manual_seed(40)
+    base_image = torch.rand(1, 3, 32, 32)
+    eps = 0.0039
 
-    x = input_vars((1, 28, 28))
-    y = output_vars(3)
+    x = input_vars((3, 32, 32))
+    y = output_vars(10)
     input_constraint = (x >= (base_image - eps)) & (x <= (base_image + eps))
-    output_constraint = (y[0] > y[1]) & (y[0] > y[2])
+    label = 0
+    output_constraint = None
+    for i in range(10):
+        if i == label:
+            continue
+        pred = y[i] > y[label]
+        output_constraint = pred if output_constraint is None else (output_constraint & pred)
+    if output_constraint is None:
+        raise ValueError("No output constraints generated.")
     spec = VerificationSpec.build_spec(
         input_vars=x,
         output_vars=y,

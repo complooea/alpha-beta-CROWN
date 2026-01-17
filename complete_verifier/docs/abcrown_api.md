@@ -65,6 +65,7 @@ Single entry point that dispatches automatically:
 - Bounds + clauses: pass `lower`, `upper`, `clauses`.
 - Expression DSL: pass `input_vars`, `output_vars`, and boolean combinations of
   comparisons (see cheat sheet below).
+- `force_simplify`: optional bool to override DNF simplification (`True` forces simplify, `False` skips; default auto for <=10 outputs).
 - `vnnlib_path="path/to/spec.vnnlib"`: load an existing VNNLIB property.
 - Notice that the API only accept **strict output specification**, i.e., **<, >** are allowed while **>=, <=** are not.
 

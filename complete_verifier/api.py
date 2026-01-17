@@ -72,6 +72,7 @@ def _ensure_config_defaults() -> None:
 
 
 def _deep_update(base: MutableMapping[str, Any], updates: Mapping[str, Any]) -> None:
+    """Recursively merge a nested mapping into another mapping."""
     for key, value in updates.items():
         if isinstance(value, Mapping):
             node = base.setdefault(key, {})
@@ -83,6 +84,7 @@ def _deep_update(base: MutableMapping[str, Any], updates: Mapping[str, Any]) -> 
 
 
 def _clone_config(config: Mapping[str, Any]) -> Dict[str, Any]:
+    """Make a deep copy of a configuration dictionary."""
     return copy.deepcopy(config)
 
 
@@ -105,6 +107,7 @@ def _shift_other_by_eps(
 
 
 def _assign_path(target: MutableMapping[str, Any], path: Sequence[str], value: Any) -> None:
+    """Create nested dict keys along a path and set the final value."""
     node: MutableMapping[str, Any] = target
     for key in path[:-1]:
         child = node.setdefault(key, {})
@@ -129,6 +132,7 @@ class ConfigBuilder:
     """Chainable helper for building verification configs."""
 
     def __init__(self, base: Optional[Mapping[str, Any]] = None):
+        """Initialize builder from defaults or a provided config snapshot."""
         _ensure_config_defaults()
         if base is None:
             base = _DEFAULT_CONFIG
@@ -136,15 +140,18 @@ class ConfigBuilder:
 
     @classmethod
     def from_defaults(cls) -> "ConfigBuilder":
+        """Create a builder starting from global defaults."""
         return cls(_DEFAULT_CONFIG)
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> "ConfigBuilder":
+        """Create a builder from an existing config mapping."""
         return cls(config)
 
     def update(self,
                *modifiers: Union[Mapping[str, Any], Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]],
                **overrides: Any) -> "ConfigBuilder":
+        """Apply modifier callables or dict merges plus keyword overrides."""
         nested_overrides: Dict[str, Any] = {}
         for key, value in overrides.items():
             if isinstance(key, str) and "__" in key:
@@ -167,23 +174,29 @@ class ConfigBuilder:
         return self
 
     def set(self, **overrides: Any) -> "ConfigBuilder":
+        """Shortcut for update with keyword overrides only."""
         return self.update(**overrides)
 
     def replace(self, config: Mapping[str, Any]) -> "ConfigBuilder":
+        """Replace stored config with a deep copy of another mapping."""
         self._cfg = _clone_config(config)
         return self
 
     def copy(self) -> "ConfigBuilder":
+        """Return a new builder that holds a copied config."""
         return ConfigBuilder(self._cfg)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Return a deep-copied config dict."""
         return _clone_config(self._cfg)
 
     def __call__(self) -> Dict[str, Any]:
+        """Alias for to_dict()."""
         return self.to_dict()
 
     @classmethod
     def from_yaml(cls, path: str) -> "ConfigBuilder":
+        """Load a YAML config file into a builder."""
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         return cls().update(data)
@@ -210,12 +223,14 @@ class VNNCompBenchmark:
     """
 
     def __init__(self, config_path: str, *, root: Optional[str] = None):
+        """Store config path and optional root override; entries load lazily."""
         self.config_path = os.path.abspath(config_path)
         self._root_override = root
         self._config: Optional[Dict[str, Any]] = None
         self._entries: Optional[Tuple[VNNCompInstance, ...]] = None
 
     def _ensure_loaded(self) -> None:
+        """Parse the YAML and CSV once and cache config and entries."""
         if self._config is None or self._entries is None:
             config, entries = _load_vnncomp_instances(self.config_path, self._root_override)
             self._config = config
@@ -274,6 +289,7 @@ def _resolve_vnncomp_root(
     config: Mapping[str, Any],
     root_override: Optional[str] = None,
 ) -> str:
+    """Resolve the benchmark root directory from config, override, or env hints."""
     general = config.get("general", {})
     raw_root = general.get("root_path")
     if not raw_root:
@@ -310,6 +326,7 @@ def _load_vnncomp_instances(
     config_path: str,
     root_override: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Tuple[VNNCompInstance, ...]]:
+    """Read config and CSV to produce per-instance metadata and a resolved config."""
     builder = ConfigBuilder.from_yaml(config_path)
     config = builder()
     root = _resolve_vnncomp_root(config_path, config, root_override)
@@ -371,6 +388,7 @@ def _execute_vnncomp_entries(
     config: Mapping[str, Any],
     entries: Sequence[VNNCompInstance],
 ) -> Tuple[Tuple[int, VNNCompInstance, SolveResult], ...]:
+    """Run solver over a list of VNN-COMP entries and collect results."""
     results: list[Tuple[int, VNNCompInstance, SolveResult]] = []
     for entry in entries:
         if not os.path.exists(entry.onnx_path):
@@ -422,6 +440,7 @@ class VariableVector:
     """Symbolic vector used when writing spec expressions."""
 
     def __init__(self, kind: str, shape: Union[int, Sequence[int], torch.Size]):
+        """Record the variable kind (input/output) and flattened size."""
         if isinstance(shape, int):
             shape = (shape,)
         elif isinstance(shape, torch.Size):
@@ -435,6 +454,7 @@ class VariableVector:
         self.size = int(np.prod(shape))
 
     def _flatten_index(self, key: Union[int, Tuple[int, ...]]) -> int:
+        """Convert multi-dimensional index into a flat position."""
         if isinstance(key, tuple):
             if len(key) != len(self.shape):
                 raise IndexError(
@@ -448,10 +468,12 @@ class VariableVector:
         return idx
 
     def __getitem__(self, key: Union[int, Tuple[int, ...]]):
+        """Return a one-hot LinearExpr for a given index."""
         flat_idx = self._flatten_index(key)
         return LinearExpr({(self.kind, flat_idx): 1.0}, 0.0)
 
     def _iter_other(self, other: Union[Sequence[float], np.ndarray, torch.Tensor, float, int]) -> Sequence[float]:
+        """Flatten and size-check comparison bounds."""
         if isinstance(other, torch.Tensor):
             flat = other.detach().view(-1).tolist()
         elif isinstance(other, np.ndarray):
@@ -467,6 +489,7 @@ class VariableVector:
         return flat
 
     def _compare(self, other: Union["VariableVector", Sequence[float], np.ndarray, torch.Tensor, float, int], op: str) -> "Predicate":
+        """Build a predicate comparing each element against a bound."""
         if op not in (">=", "<=", ">", "<"):
             raise ValueError(f"Unsupported comparison operator {op}.")
         if op in (">", "<"):
@@ -510,6 +533,7 @@ def output_vars(num_outputs: int) -> VariableVector:
 
 
 def _ensure_linear_expr(value: Union["LinearExpr", int, float]) -> "LinearExpr":
+    """Coerce scalars into LinearExpr for arithmetic helpers."""
     if isinstance(value, LinearExpr):
         return value
     if isinstance(value, (int, float)):
@@ -601,6 +625,7 @@ class Predicate:
 
 
 def _ensure_predicate(value: Union["Predicate", bool]) -> "Predicate":
+    """Verify a value is a Predicate instance."""
     if isinstance(value, Predicate):
         return value
     raise TypeError(f"Unsupported boolean expression operand {type(value).__name__}")
@@ -625,7 +650,7 @@ class ComparisonPredicate(Predicate):
             return self.rhs - self.lhs
         return self.rhs - self.lhs + _STRICT_INEQUALITY_EPS
 def _negate_comparison(pred: ComparisonPredicate) -> ComparisonPredicate:
-    """Return the logical negation of a comparison predicate."""
+    """Flip a comparison predicate to its logical negation."""
     if pred.op == "<=":
         new_op = ">"
     elif pred.op == "<":
@@ -671,13 +696,59 @@ def _assert_strict_output(predicate: Predicate) -> None:
     _walk(predicate)
 
 
-def _predicate_to_dnf(pred: Predicate, *, negate: bool = False) -> Sequence[Sequence[ComparisonPredicate]]:
+def _predicate_to_dnf(
+    pred: Predicate,
+    *,
+    negate: bool = False,
+    force_simplify: Optional[bool] = None,
+    print_original: bool = False,
+) -> Sequence[Sequence[ComparisonPredicate]]:
+    """Convert a predicate tree into disjunctive normal form using sympy."""
     symbol_map: Dict[sympy.Symbol, ComparisonPredicate] = {}
+    predicate_map: Dict[Tuple[Tuple[Tuple[str, int], float], float], sympy.Symbol] = {}
+
+    def _format_linear_expr(expr: LinearExpr) -> str:
+        """Render a LinearExpr into a readable string for printing specs."""
+        if not expr.coeffs:
+            return f"{expr.constant:.6g}"
+        items = []
+        for (kind, idx), coeff in sorted(expr.coeffs.items()):
+            var = "x" if kind == "input" else "y"
+            items.append((coeff, f"{var}[{idx}]"))
+        out = ""
+        for i, (coeff, label) in enumerate(items):
+            sign = "-" if coeff < 0 else "+"
+            abs_coeff = abs(coeff)
+            if abs_coeff == 1:
+                term = label
+            else:
+                term = f"{abs_coeff:.6g}*{label}"
+            if i == 0:
+                out = term if coeff >= 0 else f"-{term}"
+            else:
+                out = f"{out} {sign} {term}"
+        if expr.constant != 0:
+            const_sign = "-" if expr.constant < 0 else "+"
+            out = f"{out} {const_sign} {abs(expr.constant):.6g}"
+        return out
+
+    def _format_predicate(pred: ComparisonPredicate) -> str:
+        return f"{_format_linear_expr(pred.lhs)} {pred.op} {_format_linear_expr(pred.rhs)}"
+
+    def _predicate_key(pred: ComparisonPredicate) -> Tuple[Tuple[Tuple[str, int], float], float]:
+        expr = pred.normalized_expr()
+        coeff_items = tuple(sorted(((kind, idx), float(coeff)) for (kind, idx), coeff in expr.coeffs.items()))
+        constant = 0.0 if expr.constant == 0 else float(expr.constant)
+        return coeff_items, constant
 
     def to_sympy(node: Predicate) -> sympy.Expr:
         if isinstance(node, ComparisonPredicate):
-            symbol = sympy.Symbol(f"p{len(symbol_map)}", boolean=True)
-            symbol_map[symbol] = node
+            key = _predicate_key(node)
+            symbol = predicate_map.get(key)
+            if symbol is None:
+                symbol = sympy.Symbol(f"p{len(symbol_map)}", boolean=True)
+                predicate_map[key] = symbol
+                symbol_map[symbol] = node
             return symbol
         if isinstance(node, AndPredicate):
             return sympy.And(to_sympy(node.left), to_sympy(node.right))
@@ -685,10 +756,88 @@ def _predicate_to_dnf(pred: Predicate, *, negate: bool = False) -> Sequence[Sequ
             return sympy.Or(to_sympy(node.left), to_sympy(node.right))
         raise TypeError(f"Unsupported predicate type {type(node).__name__}")
 
-    sympy_expr = to_sympy(pred)
+    sympy_expr_original = to_sympy(pred)
+    sympy_expr = sympy_expr_original
     if negate:
         sympy_expr = sympy.Not(sympy_expr)
-    dnf_expr = sympy.to_dnf(sympy_expr, simplify=True)
+    num_symbols = len(sympy_expr.free_symbols)
+    if negate:
+        print_original = True
+    if force_simplify is None:
+        use_simplify = num_symbols <= 10
+        use_force = use_simplify
+    else:
+        use_simplify = force_simplify
+        use_force = force_simplify
+    if use_simplify:
+        dnf_expr = sympy.to_dnf(sympy_expr, simplify=True, force=use_force)
+    else:
+        dnf_expr = sympy.to_dnf(sympy_expr, simplify=False)
+    replacements = {
+        str(symbol): f"({_format_predicate(symbol_map[symbol])})"
+        for symbol in symbol_map
+    }
+
+    def _render_expr(expr: sympy.Expr) -> str:
+        text = str(expr)
+        for key in sorted(replacements, key=len, reverse=True):
+            text = text.replace(key, replacements[key])
+        return text
+
+    def _dnf_signature(expr: sympy.Expr) -> Tuple[Tuple[Tuple[str, bool], ...], ...]:
+        """
+        SymPy to_dnf(simplify=True) canonicalizes commutative args via
+        default_sort_key (e.g., a & b vs b & a), so normalize clauses to
+        avoid treating pure reordering as a simplification change.
+        https://docs.sympy.org/latest/modules/core.html#sympy.core.sorting.default_sort_key
+        """
+        def _collect(node: sympy.Expr) -> list[list[Tuple[str, bool]]]:
+            if node is sympy.true:
+                return [[]]
+            if node is sympy.false:
+                return []
+            if node.is_Symbol:
+                return [[(str(node), False)]]
+            if node.func is sympy.Not and node.args[0].is_Symbol:
+                return [[(str(node.args[0]), True)]]
+            if node.func is sympy.Or:
+                clauses: list[list[Tuple[str, bool]]] = []
+                for arg in node.args:
+                    clauses.extend(_collect(arg))
+                return clauses
+            if node.func is sympy.And:
+                clause: list[Tuple[str, bool]] = []
+                for arg in node.args:
+                    if arg is sympy.true:
+                        continue
+                    if arg is sympy.false:
+                        return []
+                    if arg.is_Symbol:
+                        clause.append((str(arg), False))
+                    elif arg.func is sympy.Not and arg.args[0].is_Symbol:
+                        clause.append((str(arg.args[0]), True))
+                    else:
+                        clause.append((str(arg), False))
+                return [clause]
+            return [[(str(node), False)]]
+
+        clauses = _collect(expr)
+        normalized = [tuple(sorted(clause)) for clause in clauses]
+        normalized.sort()
+        return tuple(normalized)
+
+    if print_original:
+        spec_expr = sympy_expr_original if negate else sympy_expr
+        original_dnf = sympy.to_dnf(spec_expr, simplify=False)
+        if use_simplify:
+            simplified_dnf = sympy.to_dnf(spec_expr, simplify=True, force=True)
+            if _dnf_signature(simplified_dnf) == _dnf_signature(original_dnf):
+                print(f"Specification DNF: {_render_expr(original_dnf)}")
+            else:
+                print(f"Specification DNF (original): {_render_expr(original_dnf)}")
+                print(f"Specification DNF (simplified): {_render_expr(simplified_dnf)}")
+        else:
+            print(f"Specification DNF: {_render_expr(original_dnf)}")
 
     def extract(expr: sympy.Expr) -> Sequence[Sequence[ComparisonPredicate]]:
         if expr is sympy.true:
@@ -733,6 +882,7 @@ def _aggregate_rows(
     expected_kind: str,
     vector: VariableVector,
 ) -> Tuple[torch.Tensor, torch.Tensor, Sequence[ComparisonPredicate]]:
+    """Split a clause into matrix rows for one variable kind and leftover predicates."""
     rows = []
     rhs_values = []
     input_preds: list[ComparisonPredicate] = []
@@ -760,7 +910,13 @@ def _aggregate_rows(
     return C, rhs_tensor, input_preds
 
 
-def _parse_input_bounds(predicate: Predicate, inputs: VariableVector) -> Tuple[torch.Tensor, torch.Tensor]:
+def _parse_input_bounds(
+    predicate: Predicate,
+    inputs: VariableVector,
+    *,
+    force_simplify: Optional[bool] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Turn a conjunction of input predicates into lower/upper bound tensors."""
     def _flatten_conjunction(node: Predicate) -> Sequence[ComparisonPredicate]:
         if isinstance(node, ComparisonPredicate):
             return [node]
@@ -774,7 +930,7 @@ def _parse_input_bounds(predicate: Predicate, inputs: VariableVector) -> Tuple[t
         clauses = [_flatten_conjunction(predicate)]
     except ValueError as exc:
         # Fallback to sympy DNF for expressions that may include ORs.
-        clauses = _predicate_to_dnf(predicate)
+        clauses = _predicate_to_dnf(predicate, force_simplify=force_simplify)
         if len(clauses) != 1:
             raise ValueError("Input specification must be a conjunction without OR operators.") from exc
 
@@ -812,6 +968,7 @@ class VerificationSpec:
         upper: torch.Tensor
 
         def __post_init__(self) -> None:
+            """Standardize tensors and validate shape for bounds."""
             self.lower = torch.as_tensor(self.lower).detach().clone().float()
             self.upper = torch.as_tensor(self.upper).detach().clone().float()
             if self.lower.shape != self.upper.shape:
@@ -821,13 +978,16 @@ class VerificationSpec:
 
         @property
         def num_inputs(self) -> int:
+            """Number of input samples in the batch."""
             return self.lower.shape[0]
 
         @property
         def data_shape(self) -> Tuple[int, ...]:
+            """Shape of a single input example."""
             return tuple(self.lower.shape[1:])
 
         def reshape(self, target_shape: Sequence[int]) -> None:
+            """Reshape bounds while preserving flattened size."""
             target = tuple(int(dim) for dim in target_shape)
             current = self.data_shape
             if current == target:
@@ -847,12 +1007,14 @@ class VerificationSpec:
         clauses: Sequence[Sequence[Tuple[torch.Tensor, torch.Tensor]]]
 
         def __post_init__(self) -> None:
+            """Validate and normalize clause storage."""
             if not isinstance(self.clauses, Sequence) or len(self.clauses) == 0:
                 raise ValueError("At least one specification clause is required.")
             self.clauses = list(self.clauses)
 
         @staticmethod
         def _wrap_clause(clause: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+            """Convert a raw clause into float tensors with expected dims."""
             if not isinstance(clause, Sequence) or len(clause) != 2:
                 raise ValueError("Each clause must be a (C, rhs) pair.")
             c, rhs = clause
@@ -871,6 +1033,7 @@ class VerificationSpec:
             return c_tensor, rhs_tensor
 
         def normalize(self, num_inputs: int) -> None:
+            """Expand or wrap clauses so each input has an OR-of-AND list."""
             first_clause = self.clauses[0]
             is_or_list = (
                 isinstance(first_clause, Sequence)
@@ -894,13 +1057,16 @@ class VerificationSpec:
 
     @property
     def num_inputs(self) -> int:
+        """Number of inputs represented in this spec."""
         return self.input_spec.num_inputs
 
     @property
     def input_shape(self) -> Tuple[int, ...]:
+        """Shape tuple with batch placeholder for model input."""
         return (-1, *self.input_spec.data_shape)
 
     def __post_init__(self) -> None:
+        """Ensure input/output specs are the right types and normalized."""
         if not isinstance(self.input_spec, VerificationSpec.InputSpec):
             raise TypeError("input_spec must be an instance of VerificationSpec.InputSpec.")
         if not isinstance(self.output_spec, VerificationSpec.OutputSpec):
@@ -909,10 +1075,12 @@ class VerificationSpec:
 
     @property
     def lower(self) -> torch.Tensor:
+        """Lower bounds tensor for inputs."""
         return self.input_spec.lower
 
     @property
     def upper(self) -> torch.Tensor:
+        """Upper bounds tensor for inputs."""
         return self.input_spec.upper
 
     @property
@@ -920,9 +1088,11 @@ class VerificationSpec:
         return self.output_spec.clauses
 
     def reshape_input(self, target_shape: Sequence[int]) -> None:
+        """Reshape input bounds to the desired data shape."""
         self.input_spec.reshape(target_shape)
 
     def to_vnnlib(self) -> Sequence[Tuple[Sequence[Tuple[float, float]], Sequence[Tuple[np.ndarray, np.ndarray]]]]:
+        """Convert this spec into VNNLIB-compatible tuples."""
         vnn_entries = []
         for idx in range(self.num_inputs):
             lb = self.input_spec.lower[idx].view(-1).cpu().numpy()
@@ -939,6 +1109,7 @@ class VerificationSpec:
                           center: torch.Tensor,
                           epsilon: Union[float, torch.Tensor],
                           clauses: Sequence[Sequence[Tuple[torch.Tensor, torch.Tensor]]]) -> "VerificationSpec":
+        """Build a box specification from a center point and epsilon radius."""
         center_t = torch.as_tensor(center).float()
         eps_t = torch.as_tensor(epsilon).float()
         if eps_t.ndim == 0:
@@ -956,6 +1127,7 @@ class VerificationSpec:
         upper: torch.Tensor,
         clauses: Sequence[Sequence[Tuple[torch.Tensor, torch.Tensor]]],
     ) -> "VerificationSpec":
+        """Build a specification from explicit lower/upper bounds and clauses."""
         input_spec = cls.InputSpec(lower, upper)
         output_spec = cls.OutputSpec(clauses)
         return cls(input_spec=input_spec, output_spec=output_spec)
@@ -968,12 +1140,23 @@ class VerificationSpec:
         output_vars: VariableVector,
         input_constraint: Predicate,
         output_constraint: Predicate,
+        force_simplify: Optional[bool] = None,
     ) -> "VerificationSpec":
         """Build a specification from symbolic expressions."""
-        lower, upper = _parse_input_bounds(input_constraint, input_vars)
+        input_force_simplify = force_simplify
+        output_force_simplify = force_simplify
+        if force_simplify is None:
+            output_force_simplify = output_vars.size <= 10
+        lower, upper = _parse_input_bounds(
+            input_constraint,
+            input_vars,
+            force_simplify=input_force_simplify,
+        )
         output_clauses = _predicate_to_dnf(
             output_constraint,
             negate=True,
+            force_simplify=output_force_simplify,
+            print_original=True,
         )
         clauses = []
         lower_flat = lower.view(1, -1)[0]
@@ -1012,6 +1195,7 @@ class VerificationSpec:
         path: str,
         input_shape: Optional[Sequence[int]] = None,
     ) -> "VerificationSpec":
+        """Load a VNNLIB file and wrap its content as a VerificationSpec."""
         vnnlib = read_vnnlib(path)
         if input_shape is None:
             if not vnnlib:
@@ -1057,6 +1241,7 @@ class VerificationSpec:
         output_vars: Optional["VariableVector"] = None,
         input_constraint: Optional["Predicate"] = None,
         output_constraint: Optional["Predicate"] = None,
+        force_simplify: Optional[bool] = None,
         vnnlib_path: Optional[str] = None,
         input_shape: Optional[Sequence[int]] = None,
     ) -> "VerificationSpec":
@@ -1068,6 +1253,15 @@ class VerificationSpec:
         - center box: provide center/epsilon/clauses
         - expression DSL: provide input_vars/output_vars/input_constraint/output_constraint
         - vnnlib: provide vnnlib_path (and optional input_shape)
+
+        Parameters:
+        - lower/upper: input bounds (batched tensors) for the bounds mode.
+        - clauses: OR-of-AND list of (C, rhs) tuples for output constraints.
+        - center/epsilon: center point and L-infinity radius for the center box mode.
+        - input_vars/output_vars: symbolic variables for the DSL mode.
+        - input_constraint/output_constraint: DSL predicates for input/output constraints.
+        - force_simplify: override DNF simplification (True forces, False skips; None uses auto threshold).
+        - vnnlib_path/input_shape: load a VNNLIB property (input_shape required if absent in file).
 
         """
         if vnnlib_path is not None:
@@ -1106,12 +1300,18 @@ class VerificationSpec:
             return cls.build_from_input_bounds(lower, upper, clauses)  # type: ignore[arg-type]
         if has_center:
             return cls.build_from_center(center, epsilon, clauses)  # type: ignore[arg-type]
+        if output_vars is not None and output_vars.size > 10 and force_simplify is not True:
+            print(
+                "Simplification skipped: more than 10 output variables detected. "
+                "Set force_simplify=True to force simplification."
+            )
         _assert_strict_output(output_constraint)  # type: ignore[arg-type]
         return cls.build_from_expressions(  # type: ignore[arg-type]
             input_vars=input_vars,
             output_vars=output_vars,
             input_constraint=input_constraint,
             output_constraint=output_constraint,
+            force_simplify=force_simplify,
         )
 
 @dataclass
@@ -1122,6 +1322,7 @@ class SolveResult:
     stats: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
+        """Serialize the result to a plain dictionary."""
         return {
             "status": self.status,
             "success": self.success,
@@ -1140,6 +1341,7 @@ class CounterexampleCheck:
 
 class _ApiLogger:
     def __init__(self, timeout: float) -> None:
+        """Track timing and per-phase stats during a solve run."""
         self.timeout_threshold = timeout
         self.start_time: Optional[float] = None
         self.bab_ret: list = []
@@ -1147,26 +1349,32 @@ class _ApiLogger:
         self.summary: Optional[Tuple[str, float]] = None
 
     def update_timeout(self, timeout: float) -> None:
+        """Change the timeout budget."""
         self.timeout_threshold = timeout
 
     def record_start_time(self) -> None:
+        """Mark the start timestamp."""
         self.start_time = time.time()
 
     def record_pgd_stats(self, idx: int, stats: Dict[str, Any]) -> None:
+        """Save PGD statistics for a run index."""
         self.pgd_stats[idx] = stats
 
     def summarize_results(self, status: str, idx: int) -> None:
+        """Compute elapsed time and store summary for an index."""
         if self.start_time is None:
             raise RuntimeError("Logger start time not recorded before summarizing results.")
         elapsed = time.time() - self.start_time
         self.summary = (status, elapsed)
 
     def finish(self) -> None:
+        """Placeholder for cleanup hook."""
         return
 
 
 @contextlib.contextmanager
 def _config_context(config: Mapping[str, Any]):
+    """Temporarily apply a config to the global arguments.Config."""
     _ensure_config_defaults()
     backup = _clone_config(arguments.Config.all_args)
     backup_file = arguments.Config.file
@@ -1191,6 +1399,7 @@ class ABCrownSolver:
         config: Optional[Mapping[str, Any]] = None,
         name: str = "instance",
     ) -> None:
+        """Store spec, model graph, config, and bookkeeping helpers."""
         if spec is None:
             raise ValueError("spec must be provided.")
         if computing_graph is None:
@@ -1213,12 +1422,14 @@ class ABCrownSolver:
 
     def solve(self, interm_bounds: Optional[Dict[str, Any]] = None,
               return_reference: bool = True) -> SolveResult:
+        """Solve a verification instance with the configured setup."""
         with _config_context(self.config):
             result = self._solve_impl(interm_bounds=interm_bounds, return_reference=return_reference)
         self._last_result = result
         return result
 
     def _solve_impl(self, interm_bounds: Optional[Dict[str, Any]], return_reference: bool) -> SolveResult:
+        """Core solve routine that orchestrates attacks, incomplete, and complete verification."""
         general_args = arguments.Config['general']
         bab_args = arguments.Config['bab']
         cut_enabled = bab_args['cut']['enabled']
@@ -1393,9 +1604,11 @@ class ABCrownSolver:
                            reference=reference if return_reference else {}, stats=stats)
 
     def bab(self, *args: Any, **kwargs: Any) -> Any:
+        """Expose legacy BaB entry point."""
         return bab_core(self, *args, **kwargs)
 
     def _prepare_environment(self, device: str) -> None:
+        """Set seeds, torch settings, and optional precompile based on config."""
         general_args = arguments.Config['general']
         seed = general_args['seed']
         torch.manual_seed(seed)
@@ -1426,10 +1639,12 @@ class ABCrownSolver:
                 torch.cuda.manual_seed_all(seed)
 
     def _build_vnnlib_handler(self, spec: VerificationSpec) -> vnnlibHandler:
+        """Convert internal spec into a handler used by verification routines."""
         vnnlib = spec.to_vnnlib()
         return vnnlibHandler(vnnlib, spec.input_shape)
 
     def _prepare_model(self, device: str) -> torch.nn.Module:
+        """Normalize the provided computing graph into a Torch model on the right device."""
         graph = self.computing_graph
         model: Optional[torch.nn.Module] = None
 
@@ -1471,6 +1686,7 @@ class ABCrownSolver:
         return model
 
     def _normalize_spec(self, spec: Union[VerificationSpec, Mapping[str, Any]]) -> VerificationSpec:
+        """Accept various spec formats and convert to VerificationSpec."""
         if isinstance(spec, VerificationSpec):
             return spec
         if isinstance(spec, Mapping):
@@ -1493,6 +1709,7 @@ class ABCrownSolver:
                 model_ori: torch.nn.Module,
                 verified_status: str,
                 verified_success: bool):
+        """Run PGD attack if enabled and supported."""
         if arguments.Config['model']['with_jacobian']:
             model = LiRPANet(model_ori, in_size=[1, *self.vnnlib_handler.input_shape[1:]]).net
         else:
@@ -1509,6 +1726,7 @@ class ABCrownSolver:
             return verified_status, verified_success, None, None, None
 
     def _spec_violation(self, flat_input: torch.Tensor, output: torch.Tensor) -> Tuple[bool, Optional[float]]:
+        """Check if a given input/output pair violates any loaded spec."""
         best_margin: Optional[float] = None
         for input_box, spec_list in self.vnnlib_handler.vnnlib:
             lb = torch.tensor([item[0] for item in input_box], dtype=flat_input.dtype, device=flat_input.device)
